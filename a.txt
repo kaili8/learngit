@@ -2,3 +2,4 @@ this is a file.
 AAAAAA
 A+
 add new word
+THIS IS A
