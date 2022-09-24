@@ -1,2 +1,3 @@
 this is b file.
 add something
+add b.txt
