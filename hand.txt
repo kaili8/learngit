@@ -9,3 +9,5 @@ KKKK
 book
 hand
 huoying1
+hand	:wq!
+
