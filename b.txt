@@ -1,0 +1,6 @@
+this is b file.
+add something
+add b.txt
+TS1
+two
+EFG
