@@ -1,19 +1,21 @@
-package com.test;
+package com.example.demo;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-@SpringBootApplication
 @RestController
+@SpringBootApplication
 public class DemoApplication {
+
     public static void main(String[] args) {
         SpringApplication.run(DemoApplication.class, args);
     }
 
+    // 这里就是你要的 Hello World
     @GetMapping("/hello")
     public String hello() {
-        return "CI/CD 部署成功！我是Jenkins发布的！";
+        return "✅ CI/CD 部署成功！Hello World！";
     }
 }
