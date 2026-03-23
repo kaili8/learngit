@@ -10,12 +10,13 @@ import org.springframework.web.bind.annotation.RestController;
 public class DemoApplication {
 
     public static void main(String[] args) {
+        // 直接在这里改端口！不用配置文件！
+        System.setProperty("server.port", "8088");
         SpringApplication.run(DemoApplication.class, args);
     }
 
-    // 这里就是你要的 Hello World
     @GetMapping("/hello")
     public String hello() {
-        return "✅ CI/CD 部署成功！Hello World！";
+        return "✅ 我部署成功啦！Hello World！";
     }
 }
