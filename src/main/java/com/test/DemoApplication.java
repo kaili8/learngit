@@ -17,6 +17,6 @@ public class DemoApplication {
 
     @GetMapping("/hello")
     public String hello() {
-        return "✅ 成功部署啦！123Hello World！";
+        return "✅ 部署成功啦！the first Hello World！";
     }
 }
