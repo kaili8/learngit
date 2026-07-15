@@ -1,0 +1,1210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>番茄钟</title>
+    <style>
+        /* ============================================================
+           CSS 变量（设计令牌）
+           集中管理所有颜色，方便换肤。通过修改变量值即可切换主题。
+           ============================================================ */
+        :root {
+            /* 三种模式的主题色 */
+            --color-work: #e74c3c;                          /* 专注模式：番茄红 */
+            --color-work-glow: rgba(231, 76, 60, 0.25);     /* 专注模式：发光阴影 */
+            --color-short-break: #2ecc71;                   /* 短休息模式：清新绿 */
+            --color-short-break-glow: rgba(46, 204, 113, 0.25);
+            --color-long-break: #3498db;                    /* 长休息模式：宁静蓝 */
+            --color-long-break-glow: rgba(52, 152, 219, 0.25);
+
+            /* 通用配色 */
+            --bg: #ffffff;              /* 页面背景色 */
+            --surface: #f5f5f7;         /* 卡片/面板表面色 */
+            --text: #1a1a2e;            /* 主文字颜色 */
+            --text-secondary: #888899;  /* 次要文字颜色 */
+            --ring-track: #e8e8ed;      /* 圆形进度条底色轨道 */
+        }
+
+        /* ---- 全局重置 ---- */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        /* ---- 页面主体 ---- */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+                'Microsoft YaHei', sans-serif;
+            background: var(--bg);
+            display: flex;                  /* Flexbox 居中布局 */
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;              /* 最小高度撑满视口 */
+            color: var(--text);
+            user-select: none;              /* 禁止文字选中（提升操作感） */
+            -webkit-user-select: none;
+            -webkit-tap-highlight-color: transparent;  /* 移除移动端点击高亮 */
+            overflow-x: hidden;
+        }
+
+        /* ---- 背景装饰（伪元素） ----
+           在页面背后画两个巨大的径向渐变圆，营造柔和的氛围光感。
+           使用 fixed 定位 + 超大尺寸 + 低透明度，不干扰交互。
+           ============================================================ */
+        body::before {
+            content: '';
+            position: fixed;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background:
+                /* 中央偏上的淡红色光晕 */
+                radial-gradient(ellipse at center,
+                    rgba(231, 76, 60, 0.04) 0%, transparent 50%),
+                /* 左下角的淡蓝色光晕 */
+                radial-gradient(ellipse at 30% 70%,
+                    rgba(52, 152, 219, 0.04) 0%, transparent 50%);
+            pointer-events: none;           /* 关键：让鼠标事件穿透此层 */
+            z-index: 0;
+        }
+
+        /* ---- 主容器 ---- */
+        .container {
+            position: relative;
+            z-index: 1;                     /* 确保在背景装饰层之上 */
+            display: flex;
+            flex-direction: column;         /* 垂直排列子元素 */
+            align-items: center;
+            gap: 32px;                      /* 子元素间距 */
+            padding: 20px;
+        }
+
+        /* ============================================================
+           计时器主体 — SVG 圆形进度环
+           核心原理：
+           - SVG 圆形默认从 3 点钟方向开始绘制
+           - transform: rotate(-90deg) 将其旋转到 12 点钟方向
+           - 通过改变 stroke-dashoffset 控制已走过的弧长
+           - dasharray 设为圆周长 854.51，dashoffset 越大=剩余越少
+           ============================================================ */
+        .timer-wrapper {
+            position: relative;
+            width: 320px;
+            height: 320px;
+        }
+
+        .timer-svg {
+            width: 100%;
+            height: 100%;
+            transform: rotate(-90deg);      /* 让进度从 12 点方向开始 */
+        }
+
+        /* 底层灰色轨道环（固定不变） */
+        .ring-track {
+            fill: none;
+            stroke: var(--ring-track);
+            stroke-width: 8;
+        }
+
+        /* 上层进度环（随倒计时变化） */
+        .ring-progress {
+            fill: none;
+            stroke: var(--color-work);      /* 默认红色，会被 JS 动态切换类名覆盖 */
+            stroke-width: 8;
+            stroke-linecap: round;          /* 端点圆角 */
+            transition: stroke 0.5s ease, stroke-dashoffset 0.3s linear;  /* 颜色渐变 + 进度平滑 */
+        }
+
+        /* 三种模式下的进度环颜色（由 JS 动态添加类名切换） */
+        .ring-progress.mode-work           { stroke: var(--color-work);        filter: drop-shadow(0 0 8px var(--color-work-glow)); }
+        .ring-progress.mode-short-break    { stroke: var(--color-short-break); filter: drop-shadow(0 0 8px var(--color-short-break-glow)); }
+        .ring-progress.mode-long-break     { stroke: var(--color-long-break);  filter: drop-shadow(0 0 8px var(--color-long-break-glow)); }
+
+        /* ---- 时间显示区域（绝对定位在圆环正中央） ---- */
+        .time-display {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);  /* 经典居中技巧 */
+            text-align: center;
+        }
+
+        /* 时间数字 "25:00" */
+        .time-text {
+            font-size: 72px;
+            font-weight: 200;                             /* 极细字重，现代感 */
+            letter-spacing: 4px;
+            font-variant-numeric: tabular-nums;           /* 等宽数字，防止跳变 */
+            font-family: 'SF Mono', 'Cascadia Code', 'Consolas', 'PingFang SC', monospace;
+            line-height: 1;
+            color: var(--text);
+            transition: color 0.5s ease;
+        }
+
+        /* 模式标签 "专注" / "短休息" / "长休息" */
+        .mode-label {
+            font-size: 15px;
+            font-weight: 500;
+            letter-spacing: 3px;
+            margin-top: 10px;
+            transition: color 0.5s ease;
+            text-transform: uppercase;
+        }
+
+        .mode-label.mode-work        { color: var(--color-work); }
+        .mode-label.mode-short-break { color: var(--color-short-break); }
+        .mode-label.mode-long-break  { color: var(--color-long-break); }
+
+        /* ============================================================
+           控制按钮区
+           三个按钮一字排开：重置 | 开始/暂停 | 跳过
+           ============================================================ */
+        .controls {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+
+        /* 主按钮（开始/暂停）— 最大最醒目 */
+        .btn-start {
+            width: 72px;
+            height: 72px;
+            font-size: 28px;
+            color: #fff;
+            border-radius: 50%;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        /* 主按钮配色随模式变化 */
+        .btn-start.mode-work        { background: var(--color-work);        box-shadow: 0 4px 20px var(--color-work-glow); }
+        .btn-start.mode-short-break { background: var(--color-short-break); box-shadow: 0 4px 20px var(--color-short-break-glow); }
+        .btn-start.mode-long-break  { background: var(--color-long-break);  box-shadow: 0 4px 20px var(--color-long-break-glow); }
+
+        .btn-start:hover  { transform: translateY(-2px); box-shadow: 0 6px 28px rgba(0, 0, 0, 0.3); }  /* 悬停上浮 */
+        .btn-start:active { transform: scale(0.93) translateY(0); }                                    /* 点击回弹 */
+
+        /* 次要按钮（重置、跳过）— 较小、低调 */
+        .btn-secondary {
+            width: 52px;
+            height: 52px;
+            font-size: 18px;
+            background: var(--surface);
+            color: var(--text-secondary);
+            border: 1px solid #e0e0e5;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn-secondary:hover {
+            color: var(--text);
+            border-color: #c0c0c8;
+            background: #eeeef2;
+        }
+
+        .btn-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* ============================================================
+           番茄计数区
+           显示 4 个小圆点 + 今日累计数字。每完成一个番茄，点亮一个圆点。
+           满 4 个后进入长休息，所有圆点重置。
+           ============================================================ */
+        .session-tracker {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        /* 单个番茄圆点（默认灰色=未完成） */
+        .tomato-dot {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--ring-track);
+            transition: all 0.4s ease;
+        }
+
+        /* 已完成的番茄圆点（红色 + 发光 + 弹入动画） */
+        .tomato-dot.completed {
+            background: var(--color-work);
+            box-shadow: 0 0 8px var(--color-work-glow);
+            animation: popIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        /* 弹入关键帧：从无到有，过冲一点再回弹 */
+        @keyframes popIn {
+            0%   { transform: scale(0); }
+            70%  { transform: scale(1.4); }
+            100% { transform: scale(1); }
+        }
+
+        .session-label {
+            font-size: 13px;
+            color: var(--text-secondary);
+            letter-spacing: 1px;
+        }
+
+        /* ============================================================
+           设置面板（模态弹窗）
+           点击右上角 ⚙️ 图标打开，包含三种时长的输入框。
+           使用 fixed 定位 + 居中 + 缩放动画。
+           ============================================================ */
+        .settings-toggle {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 20px;
+            padding: 8px;
+            transition: color 0.2s;
+            position: fixed;             /* 固定在视口右上角 */
+            top: 16px;
+            right: 16px;
+            z-index: 10;
+        }
+
+        .settings-toggle:hover { color: #333; }
+
+        /* 设置面板本体 — 默认 display: none 隐藏 */
+        .settings-panel {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0.9);  /* 初始略微缩小 */
+            background: var(--surface);
+            border: 1px solid #e0e0e5;
+            border-radius: 20px;
+            padding: 32px;
+            z-index: 100;
+            display: none;                                /* 默认隐藏 */
+            flex-direction: column;
+            gap: 20px;
+            min-width: 300px;
+            backdrop-filter: blur(20px);                  /* 毛玻璃效果 */
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.12);
+            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        /* open 类：显示面板 + 缩放到正常大小 */
+        .settings-panel.open {
+            display: flex;
+            transform: translate(-50%, -50%) scale(1);
+        }
+
+        /* 设置面板背后的半透明遮罩 */
+        .settings-overlay {
+            position: fixed;
+            inset: 0;                                     /* 铺满整个视口 */
+            background: rgba(0, 0, 0, 0.6);
+            z-index: 99;                                  /* 比面板低 1 层 */
+            display: none;
+            backdrop-filter: blur(4px);
+        }
+
+        .settings-overlay.open { display: block; }
+
+        .settings-title {
+            font-size: 18px;
+            font-weight: 600;
+            text-align: center;
+            letter-spacing: 2px;
+        }
+
+        .setting-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .setting-label {
+            font-size: 14px;
+            color: var(--text-secondary);
+            white-space: nowrap;
+        }
+
+        .setting-input {
+            width: 70px;
+            padding: 8px 12px;
+            border-radius: 10px;
+            border: 1px solid #e0e0e5;
+            background: var(--bg);
+            color: var(--text);
+            font-size: 14px;
+            text-align: center;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .setting-input:focus { border-color: var(--color-work); }
+
+        .btn-save {
+            width: 100%;
+            padding: 12px;
+            border-radius: 12px;
+            border: none;
+            background: var(--color-work);
+            color: #fff;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            letter-spacing: 2px;
+            transition: all 0.2s;
+        }
+
+        .btn-save:hover { filter: brightness(1.1); }
+
+        /* ============================================================
+           Toast 轻提示
+           计时结束时从屏幕顶部滑入，2.5 秒后自动滑出。
+           ============================================================ */
+        .toast {
+            position: fixed;
+            top: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(-120px);  /* 初始隐藏在屏幕上方 */
+            background: var(--surface);
+            border: 1px solid #e0e0e5;
+            padding: 12px 24px;
+            border-radius: 12px;
+            font-size: 14px;
+            letter-spacing: 1px;
+            z-index: 200;
+            transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            pointer-events: none;                             /* 不阻挡底层交互 */
+        }
+
+        .toast.show { transform: translateX(-50%) translateY(0); }  /* 滑入视口 */
+
+
+        /* ============================================================
+           响应式布局（移动端适配）
+           屏幕宽度 ≤ 480px 时缩小所有元素尺寸。
+           ============================================================ */
+        @media (max-width: 480px) {
+            .timer-wrapper   { width: 260px; height: 260px; }
+            .time-text       { font-size: 56px; }
+            .mode-label      { font-size: 13px; letter-spacing: 2px; }
+            .btn-start       { width: 60px; height: 60px; font-size: 24px; }
+            .btn-secondary   { width: 44px; height: 44px; font-size: 16px; }
+            .settings-panel  { min-width: 260px; padding: 24px; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Toast 轻提示（默认隐藏，计时结束时弹出） -->
+    <div class="toast" id="toast"></div>
+
+    <!-- 设置面板的暗色遮罩层（点击遮罩关闭设置） -->
+    <div class="settings-overlay" id="settingsOverlay"></div>
+
+    <!-- 设置面板（模态弹窗） -->
+    <div class="settings-panel" id="settingsPanel">
+        <div class="settings-title">⚙️ 设置</div>
+        <div class="setting-row">
+            <span class="setting-label">🍅 专注时长 (分钟)</span>
+            <input class="setting-input" type="number" id="workDuration" min="1" max="120" value="25">
+        </div>
+        <div class="setting-row">
+            <span class="setting-label">☕ 短休息 (分钟)</span>
+            <input class="setting-input" type="number" id="shortBreakDuration" min="1" max="30" value="5">
+        </div>
+        <div class="setting-row">
+            <span class="setting-label">🌴 长休息 (分钟)</span>
+            <input class="setting-input" type="number" id="longBreakDuration" min="1" max="60" value="15">
+        </div>
+        <button class="btn-save" id="btnSaveSettings">保 存</button>
+    </div>
+
+    <!-- ====== 主容器 ====== -->
+    <div class="container">
+
+        <!-- 计时器显示区：SVG 圆环 + 居中时间文字 -->
+        <div class="timer-wrapper">
+            <!--
+              SVG 圆形进度环
+              - viewBox="0 0 300 300" 定义画布坐标系
+              - r=136 是圆的半径，cx/cy=150 是圆心
+              - 圆周长 = 2×π×136 ≈ 854.51
+              - stroke-dasharray="854.51" 设置虚线长度=圆周长
+              - stroke-dashoffset 控制虚线偏移量：0=满圆，854.51=空圆
+              - JS 通过动态修改 dashoffset 来实现倒计时动画
+            -->
+            <svg class="timer-svg" viewBox="0 0 300 300">
+                <circle class="ring-track" cx="150" cy="150" r="136" />
+                <circle class="ring-progress" id="ringProgress" cx="150" cy="150" r="136"
+                stroke-dasharray="854.51" stroke-dashoffset="0" />
+            </svg>
+
+            <!-- 时间数字 + 模式标签，绝对定位在圆环正中 -->
+            <div class="time-display">
+                <div class="time-text mode-work" id="timeText">25:00</div>
+                <div class="mode-label mode-work" id="modeLabel">专注</div>
+            </div>
+        </div>
+
+        <!-- 三按钮控制栏 -->
+        <div class="controls">
+            <button class="btn-secondary" id="btnReset" title="重置">
+                <span class="btn-icon">↺</span>
+            </button>
+            <button class="btn-start mode-work" id="btnStart" title="开始">
+                <span class="btn-icon" id="btnStartIcon">▶</span>
+            </button>
+            <button class="btn-secondary" id="btnSkip" title="跳过">
+                <span class="btn-icon">⏭</span>
+            </button>
+        </div>
+
+        <!-- 番茄计数：4 个小圆点 + 累计数字 -->
+        <div class="session-tracker" id="sessionTracker">
+            <span class="session-label">今日番茄</span>
+            <span class="tomato-dot"></span>
+            <span class="tomato-dot"></span>
+            <span class="tomato-dot"></span>
+            <span class="tomato-dot"></span>
+            <span class="session-label" id="sessionCount">0</span>
+        </div>
+    </div>
+
+    <!-- 右上角设置齿轮按钮 -->
+    <button class="settings-toggle" id="btnSettings" title="设置">⚙️</button>
+
+    <script>
+        // ============================================================
+        //  番茄钟 — 核心逻辑（立即执行函数表达式 IIFE）
+        //  使用 IIFE 包裹避免污染全局命名空间，所有变量均为局部。
+        // ============================================================
+        (function() {
+
+            // ==================== 第一部分：DOM 元素引用 ====================
+            // 把所有需要操作的页面元素缓存到变量中，避免重复查询 DOM。
+            // 变量名以 $ 开头，表示这是一个 DOM 元素引用（jQuery 风格约定）。
+
+            var $ring                = document.getElementById('ringProgress');       // 圆形进度环
+            var $timeText            = document.getElementById('timeText');          // 时间数字 "25:00"
+            var $modeLabel           = document.getElementById('modeLabel');         // 模式标签 "专注"
+            var $btnStart            = document.getElementById('btnStart');          // 开始/暂停按钮
+            var $btnStartIcon        = document.getElementById('btnStartIcon');      // 按钮内图标 ▶/⏸
+            var $btnReset            = document.getElementById('btnReset');          // 重置按钮
+            var $btnSkip             = document.getElementById('btnSkip');           // 跳过按钮
+            var $btnSettings         = document.getElementById('btnSettings');       // 设置齿轮按钮
+            var $settingsPanel       = document.getElementById('settingsPanel');     // 设置面板
+            var $settingsOverlay     = document.getElementById('settingsOverlay');   // 设置遮罩
+            var $btnSaveSettings     = document.getElementById('btnSaveSettings');   // 保存设置按钮
+            var $workDurationInput   = document.getElementById('workDuration');      // 专注时长输入框
+            var $shortBreakDurationInput = document.getElementById('shortBreakDuration'); // 短休息输入框
+            var $longBreakDurationInput  = document.getElementById('longBreakDuration');   // 长休息输入框
+            var $sessionTracker      = document.getElementById('sessionTracker');    // 番茄计数容器
+            var $toast               = document.getElementById('toast');             // Toast 提示元素
+            var $dots                = [];                                            // 番茄圆点缓存（init 时填充）
+
+            // SVG 圆的周长 = 2 × π × 136（半径）= 854.51
+            // 这个值在 stroke-dasharray 和 stroke-dashoffset 中使用
+            var CIRCUMFERENCE = 2 * Math.PI * 136;
+
+
+            // ==================== 第二部分：音频引擎 ====================
+            // 使用 Web Audio API 合成提示音，无需外部音频文件。
+            // AudioContext 在用户首次交互时才创建（浏览器自动播放策略要求）。
+
+            var audioCtx = null;  // 延迟初始化，首次调用 getAudioContext() 时创建
+
+            /**
+             * 获取或创建 AudioContext 实例
+             * 浏览器要求 AudioContext 必须在用户手势之后才能创建，
+             * 所以我们通过点击/按键事件来触发首次创建。
+             */
+            function getAudioContext() {
+                if (!audioCtx) {
+                    // 兼容处理：标准浏览器用 AudioContext，Safari 旧版用 webkitAudioContext
+                    var AudioCtx = window.AudioContext || window.webkitAudioContext;
+                    audioCtx = new AudioCtx();
+                }
+                return audioCtx;
+            }
+
+            /**
+             * 播放一个简单的蜂鸣音
+             * @param {number} freq     - 频率（Hz），880=高音 A5，440=中音 A4
+             * @param {number} duration - 持续时长（秒）
+             * @param {string} type     - 波形类型：'sine'正弦波, 'square'方波, 'triangle'三角波
+             * @param {number} gain     - 音量（0~1）
+             *
+             * 原理：创建振荡器 → 连接音量控制器 → 连接到扬声器 → 播放后自动销毁
+             */
+            function playBeep(freq, duration, type, gain) {
+                type = type || 'sine';
+                gain = gain || 0.3;
+                try {
+                    var ctx = getAudioContext();
+                    var osc = ctx.createOscillator();        // 振荡器：产生特定频率的波形
+                    var gainNode = ctx.createGain();          // 增益节点：控制音量
+
+                    osc.type = type;                          // 设置波形
+                    osc.frequency.setValueAtTime(freq, ctx.currentTime);  // 设置频率
+
+                    gainNode.gain.setValueAtTime(gain, ctx.currentTime);  // 初始音量
+                    gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration); // 渐弱到静音
+
+                    osc.connect(gainNode);                    // 振荡器 → 增益
+                    gainNode.connect(ctx.destination);        // 增益 → 扬声器
+
+                    osc.start(ctx.currentTime);               // 开始播放
+                    osc.stop(ctx.currentTime + duration);      // 定时停止（自动销毁）
+                } catch (e) {
+                    // 音频播放失败时静默处理，不影响其他功能
+                }
+            }
+
+            /**
+             * 计时结束提示音：三段上行音阶
+             * 880Hz → 1100Hz → 1320Hz，间隔 150ms，形成"叮叮咚"的效果
+             */
+            function playNotification() {
+                playBeep(880, 0.15, 'sine', 0.25);                                // 第一声
+                setTimeout(function() { playBeep(1100, 0.15, 'sine', 0.25); }, 150); // 150ms 后第二声
+                setTimeout(function() { playBeep(1320, 0.3, 'sine', 0.3); }, 300);   // 300ms 后第三声
+            }
+
+            /**
+             * 按钮点击音效：短促的低音
+             */
+            function playClickSound() {
+                playBeep(600, 0.06, 'sine', 0.1);
+            }
+
+
+            // ==================== 第三部分：状态管理 ====================
+            // state 对象是整个应用的核心数据源（单一数据源原则）。
+            // 所有 UI 渲染都从 state 读取数据，所有操作都通过修改 state 来驱动 UI。
+
+            var STORAGE_KEY = 'pomodoro_state_v2';  // localStorage 键名
+
+            // 默认设置（单位：秒）
+            var DEFAULT_SETTINGS = {
+                work: 25 * 60,        // 专注 25 分钟 = 1500 秒
+                shortBreak: 5 * 60,   // 短休息 5 分钟 = 300 秒
+                longBreak: 15 * 60,   // 长休息 15 分钟 = 900 秒
+            };
+
+            /**
+             * 获取今天的日期字符串（格式：YYYY-MM-DD）
+             * 用于判断是否跨天，跨天则重置番茄计数。
+             */
+            function today() {
+                return new Date().toISOString().split('T')[0];
+            }
+
+            /**
+             * 从 localStorage 加载持久化状态
+             * 同时处理以下边界情况：
+             * 1. 首次使用（无存储数据）→ 返回默认值
+             * 2. 数据损坏 → 返回默认值
+             * 3. 跨天 → 重置番茄计数为 0
+             * 4. 设置项缺失 → 用默认值补全
+             */
+            function loadPersistedState() {
+                try {
+                    var raw = localStorage.getItem(STORAGE_KEY);
+                    if (raw) {
+                        var saved = JSON.parse(raw);
+
+                        // 逐项合并设置，避免用户新增设置项时丢失
+                        var settings = {};
+                        var keys = Object.keys(DEFAULT_SETTINGS);
+                        for (var i = 0; i < keys.length; i++) {
+                            var k = keys[i];
+                            settings[k] = (saved.settings && saved.settings[k] != null)
+                                ? saved.settings[k]
+                                : DEFAULT_SETTINGS[k];
+                        }
+
+                        var completed = saved.completedPomodoros || 0;
+                        var savedDate = saved.date || today();
+
+                        // 关键：跨天自动重置番茄计数
+                        if (savedDate !== today()) {
+                            completed = 0;
+                            savedDate = today();
+                        }
+
+                        return {
+                            settings: settings,
+                            completedPomodoros: completed,
+                            date: savedDate,
+                        };
+                    }
+                } catch (e) {
+                    // JSON 解析失败（数据损坏），走下面的默认返回值
+                }
+                // 兜底：返回全新的默认状态
+                return {
+                    settings: DEFAULT_SETTINGS,
+                    completedPomodoros: 0,
+                    date: today(),
+                };
+            }
+
+            /**
+             * 将当前状态写入 localStorage
+             * 仅保存需要持久化的字段（设置 + 番茄计数 + 日期）
+             */
+            function persistState() {
+                try {
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+                        settings: state.settings,
+                        completedPomodoros: state.completedPomodoros,
+                        date: state.date,
+                    }));
+                } catch (e) {
+                    // 存储不可用（如隐私模式、配额满），静默失败
+                }
+            }
+
+            // ---- 加载持久化状态，构建核心 state 对象 ----
+            // 注意：loadPersistedState() 内部已处理跨天重置，
+            // 所以这里不需要再调用任何依赖 state 的函数。
+            var persisted = loadPersistedState();
+
+            /**
+             * state — 应用核心状态对象
+             *
+             * 字段说明：
+             *   mode              - 当前模式：'work' | 'shortBreak' | 'longBreak'
+             *   timeLeft          - 剩余秒数（每秒递减）
+             *   totalTime         - 当前阶段总秒数（用于计算进度百分比）
+             *   isRunning         - 计时器是否正在运行
+             *   completedPomodoros- 今日已完成的番茄总数
+             *   date              - 日期，用于判断跨天
+             *   settings          - 时长设置对象
+             *   timerId           - setInterval 返回的定时器 ID
+             */
+            var state = {
+                mode: 'work',                             // 初始模式：专注
+                timeLeft: persisted.settings.work,        // 初始时间：25 分钟
+                totalTime: persisted.settings.work,       // 总时长：25 分钟
+                isRunning: false,                         // 初始不运行
+                completedPomodoros: persisted.completedPomodoros,  // 从存储恢复
+                date: persisted.date,
+                settings: persisted.settings,
+                timerId: null,                            // 尚无定时器
+            };
+
+
+            // 模式常量（模块级，避免每次调用时重复创建对象）
+            var MODE_LABELS   = { work: '专注', shortBreak: '短休息', longBreak: '长休息' };
+            var MODE_ICONS    = { work: '🍅', shortBreak: '☕', longBreak: '🌴' };
+            var TOAST_MSGS    = { work: '🍅 专注完成！休息一下~', shortBreak: '☕ 休息结束，继续专注！', longBreak: '🌴 长休息结束，新开始！' };
+            var NOTIFY_BODIES = { work: '🍅 专注时间结束！休息一下吧~', shortBreak: '☕ 短休息结束，继续加油！', longBreak: '🌴 长休息结束，开始新的番茄！' };
+            var _prevModeClass = 'mode-work';  // 跟踪当前模式类，避免重复 DOM 操作
+
+            // ==================== 第四部分：UI 渲染函数 ====================
+            // 这些函数负责将 state 中的数据同步到 DOM 上。
+            // 遵循"状态驱动视图"模式：改 state → 调 render → 视图更新。
+
+            /**
+             * 格式化秒数为 MM:SS 字符串
+             * 例：65 秒 → "01:05"
+             */
+            function formatTime(seconds) {
+                var m = Math.floor(seconds / 60);
+                var s = seconds % 60;
+                return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+            }
+
+            /**
+             * 更新 SVG 圆形进度环
+             *
+             * 原理：
+             *   fraction = timeLeft / totalTime  （剩余比例，0~1）
+             *   offset = CIRCUMFERENCE × (1 - fraction)
+             *   当 fraction=1（满）时 offset=0，显示完整圆
+             *   当 fraction=0.5 时 offset=一半，显示半圆
+             *   当 fraction=0 时 offset=全周长，圆消失
+             */
+            function updateRingProgress() {
+                var fraction = state.totalTime > 0 ? state.timeLeft / state.totalTime : 1;
+                var offset = CIRCUMFERENCE * (1 - fraction);
+                $ring.setAttribute('stroke-dashoffset', offset);
+            }
+
+            /**
+             * 将 state.mode 映射为 CSS 类名后缀
+             */
+            function getModeCssClass() {
+                if (state.mode === 'shortBreak') return 'short-break';
+                if (state.mode === 'longBreak')  return 'long-break';
+                return 'work';
+            }
+
+            /**
+             * 更新模式相关的 UI
+             * — 切换进度环 / 时间文字 / 模式标签 / 按钮的颜色类名
+             * — 更新模式标签文字
+             */
+            function updateModeUI() {
+                var modeCls = 'mode-' + getModeCssClass();
+                if (modeCls === _prevModeClass) return;
+                _prevModeClass = modeCls;
+
+                // 需要切换颜色的 4 个元素
+                var allModes = ['mode-work', 'mode-short-break', 'mode-long-break'];
+                var elements = [$ring, $timeText, $modeLabel, $btnStart];
+
+                // 先移除所有模式类，再添加当前模式类
+                for (var i = 0; i < elements.length; i++) {
+                    for (var j = 0; j < allModes.length; j++) {
+                        elements[i].classList.remove(allModes[j]);
+                    }
+                    elements[i].classList.add(modeCls);
+                }
+
+                // 更新标签文字
+                $modeLabel.textContent = MODE_LABELS[state.mode] || '专注';
+
+                updatePageTitle();
+            }
+
+            /** 刷新时间数字 + 进度环 */
+            function updateTimeDisplay(timeStr) {
+                $timeText.textContent = timeStr || formatTime(state.timeLeft);
+                updateRingProgress();
+            }
+
+            /** 根据运行状态切换按钮图标：▶ 还是 ⏸ */
+            function updateStartButton() {
+                $btnStartIcon.textContent = state.isRunning ? '⏸' : '▶';
+            }
+
+            /**
+             * 更新番茄计数显示
+             *
+             * 4 个圆点为一组，completedPomodoros % 4 决定点亮几个。
+             * 使用 innerHTML 重建整个区域（简单直接）。
+             */
+            function updateSessionTracker() {
+                var completed = state.completedPomodoros % 4;
+                for (var i = 0; i < 4; i++) {
+                    $dots[i].classList.toggle('completed', i < completed);
+                }
+                var countEl = document.getElementById('sessionCount');
+                if (countEl) countEl.textContent = state.completedPomodoros;
+            }
+
+            /**
+             * 更新浏览器标签页标题
+             * 运行时显示倒计时：如 "24:35 🍅 番茄钟"
+             * 暂停时显示图标：如 "🍅 番茄钟"
+             */
+            function updatePageTitle(timeStr) {
+                var icon = MODE_ICONS[state.mode] || '🍅';
+                document.title = state.isRunning ? (timeStr || formatTime(state.timeLeft)) + ' ' + icon + ' 番茄钟' : icon + ' 番茄钟';
+            }
+
+            /** 全量渲染：一次性刷新所有 UI */
+            function renderAll() {
+                updateTimeDisplay();
+                updateModeUI();
+                updateStartButton();
+                updateSessionTracker();
+                updatePageTitle();
+            }
+
+
+            // ==================== 第五部分：计时器核心逻辑 ====================
+            // 这是应用的心脏，负责倒计时的启动、暂停、重置、结束处理。
+
+            /**
+             * 启动计时器
+             *
+             * 实现方式：setInterval 每 1000ms 触发一次。
+             * 不使用每秒递减 1 的方式（误差会累积），而是：
+             *   1. 记录启动时的真实时间戳 startTime
+             *   2. 每次 tick 计算 当前时间 - startTime = 已过秒数
+             *   3. timeLeft = 原始剩余秒数 - 已过秒数
+             * 这样即使 JS 事件循环有延迟，累计误差不会超过 1000ms。
+             */
+            function startTimer() {
+                if (state.isRunning) return;      // 已在运行，忽略重复调用
+                state.isRunning = true;
+                updateStartButton();              // 按钮变为 ⏸
+
+                var startTime = Date.now();       // 记录启动时刻的时间戳（毫秒）
+                var startSeconds = state.timeLeft; // 记录启动时的剩余秒数
+
+                state.timerId = setInterval(function() {
+                    // 计算从启动到现在经过了多少秒
+                    var elapsed = Math.floor((Date.now() - startTime) / 1000);
+                    // 剩余 = 初始值 - 已过（防溢出取 max(0, ...)）
+                    state.timeLeft = Math.max(0, startSeconds - elapsed);
+                    var timeStr = formatTime(state.timeLeft);
+                    updateTimeDisplay(timeStr);
+                    updatePageTitle(timeStr);
+
+                    // 倒计时归零 → 触发计时结束流程
+                    if (state.timeLeft <= 0) {
+                        handleTimerEnd();
+                    }
+                }, 1000);  // 1000ms 刷新一次
+            }
+
+            /**
+             * 暂停计时器
+             * 清除 setInterval，保持 timeLeft 不变，下次启动从当前时间继续。
+             */
+            function pauseTimer() {
+                if (!state.isRunning) return;
+                state.isRunning = false;
+                if (state.timerId) {
+                    clearInterval(state.timerId);
+                    state.timerId = null;
+                }
+                updateStartButton();   // 按钮变为 ▶
+                updatePageTitle();
+            }
+
+            /**
+             * 重置计时器
+             * 停止计时 → 将 timeLeft 恢复到当前模式的满时长 → 刷新 UI
+             */
+            function resetTimer() {
+                if (state.timerId) {
+                    clearInterval(state.timerId);
+                    state.timerId = null;
+                }
+                state.isRunning = false;
+
+                state.timeLeft = state.settings[state.mode];
+                state.totalTime = state.settings[state.mode];
+
+                updateStartButton();
+                updateTimeDisplay();
+                updatePageTitle();
+            }
+
+            /**
+             * 跳过当前阶段
+             * 直接触发计时结束流程，进入下一模式。
+             */
+            function skipToNext() {
+                if (state.timerId) {
+                    clearInterval(state.timerId);
+                    state.timerId = null;
+                }
+                state.isRunning = false;
+                handleTimerEnd();
+            }
+
+            /**
+             * 计时结束处理（核心状态机转换）
+             *
+             * 流程：
+             *   1. 停止定时器
+             *   2. 如果是专注模式完成 → 番茄计数 +1，持久化
+             *   3. 播放提示音 + 发桌面通知 + 显示 Toast
+             *   4. 切换模式（专注→休息 / 休息→专注）
+             *   5. 刷新所有 UI
+             */
+            function handleTimerEnd() {
+                // 1. 停止定时器
+                if (state.timerId) {
+                    clearInterval(state.timerId);
+                    state.timerId = null;
+                }
+                state.isRunning = false;
+
+                // 2. 记录结束时的模式（switchMode 会改 mode，所以先保存）
+                var endingMode = state.mode;
+
+                // 3. 如果是专注模式结束，累加番茄计数
+                if (endingMode === 'work') {
+                    state.completedPomodoros++;       // 总完成数 +1
+                    persistState();                   // 写入 localStorage
+                    updateSessionTracker();           // 刷新圆点
+                }
+
+                // 4. 通知用户（音频 + 桌面通知 + Toast）
+                playNotification();
+                sendNotification(endingMode);
+                showToast(endingMode);
+
+                // 5. 切换到下一模式
+                switchMode();
+
+                // 6. 刷新 UI
+                updateStartButton();
+                updateTimeDisplay();
+                updateModeUI();
+            }
+
+            /**
+             * 模式切换逻辑（状态机）
+             *
+             * 规则：
+             *   - 专注 → 短休息（通常）
+             *   - 专注 → 长休息（每完成 4 个番茄时）
+             *   - 任意休息 → 专注
+             *
+             *  以 completedPomodoros 判断：
+             *   第 1~3 个番茄结束 → 短休息
+             *   第 4 的倍数个番茄结束 → 长休息
+             */
+            function switchMode() {
+                if (state.mode === 'work') {
+                    // 专注结束 → 判断进入短休息还是长休息
+                    if (state.completedPomodoros > 0 && state.completedPomodoros % 4 === 0) {
+                        // 连续完成 4 的倍数个番茄 → 长休息
+                        state.mode = 'longBreak';
+                        state.timeLeft = state.settings.longBreak;
+                        state.totalTime = state.settings.longBreak;
+                    } else {
+                        // 否则 → 短休息
+                        state.mode = 'shortBreak';
+                        state.timeLeft = state.settings.shortBreak;
+                        state.totalTime = state.settings.shortBreak;
+                    }
+                } else {
+                    // 休息结束 → 回到专注模式
+                    state.mode = 'work';
+                    state.timeLeft = state.settings.work;
+                    state.totalTime = state.settings.work;
+                }
+            }
+
+
+            // ==================== 第六部分：通知与提示 ====================
+
+            /**
+             * 发送浏览器桌面通知
+             * 需要用户已授权 Notification 权限。
+             * @param {string} forMode - 哪个模式结束了
+             */
+            function sendNotification(forMode) {
+                if (typeof Notification === 'undefined') return;          // 浏览器不支持
+                if (Notification.permission !== 'granted') return;        // 未授权或已拒绝
+                try {
+                    new Notification('番茄钟', { body: NOTIFY_BODIES[forMode] || '', icon: '🍅' });
+                } catch (e) {
+                    // 通知发送失败（某些浏览器可能有限制），静默处理
+                }
+            }
+
+            /**
+             * 请求桌面通知权限
+             * 在用户首次点击"开始"时调用，此时属于用户手势上下文。
+             */
+            function requestNotificationPermission() {
+                if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+                    Notification.requestPermission();
+                }
+            }
+
+            // Toast 定时器句柄（用于防抖，避免多次弹出时冲突）
+            var toastTimer = null;
+
+            /**
+             * 显示顶部 Toast 提示
+             * 弹出 2.5 秒后自动消失。
+             * @param {string} forMode - 当前结束的模式
+             */
+            function showToast(forMode) {
+                $toast.textContent = TOAST_MSGS[forMode] || '';
+                $toast.classList.add('show');                 // 触发 CSS 滑入动画
+
+                if (toastTimer) clearTimeout(toastTimer);     // 取消之前的隐藏定时器
+                toastTimer = setTimeout(function() {
+                    $toast.classList.remove('show');          // 触发 CSS 滑出动画
+                }, 2500);
+            }
+
+
+            // ==================== 第七部分：事件绑定 ====================
+            // 将所有用户交互事件连接到对应处理函数。
+
+            /**
+             * 开始/暂停按钮点击
+             *
+             * 逻辑：
+             *   如果正在运行 → 暂停
+             *   如果已归零   → 先重置到当前模式满时长，再开始
+             *   否则         → 直接开始
+             */
+            $btnStart.addEventListener('click', function() {
+                playClickSound();
+                if (state.isRunning) {
+                    pauseTimer();
+                } else {
+                    // 特殊情况：计时已归零，用户再次点击开始
+                    // 需要先恢复满时长再启动，否则会直接触发 handleTimerEnd
+                    if (state.timeLeft <= 0) {
+                        state.timeLeft = state.settings[state.mode];
+                        state.totalTime = state.settings[state.mode];
+                        updateTimeDisplay();
+                    }
+                    startTimer();
+                    requestNotificationPermission();  // 趁机请求通知权限
+                }
+            });
+
+            /** 重置按钮 */
+            $btnReset.addEventListener('click', function() {
+                playClickSound();
+                resetTimer();
+            });
+
+            /** 跳过按钮 */
+            $btnSkip.addEventListener('click', function() {
+                playClickSound();
+                skipToNext();
+            });
+
+            /** 设置齿轮按钮 → 打开设置面板 */
+            $btnSettings.addEventListener('click', function() {
+                // 打开面板前将当前设置值填入输入框
+                $workDurationInput.value = state.settings.work / 60;
+                $shortBreakDurationInput.value = state.settings.shortBreak / 60;
+                $longBreakDurationInput.value = state.settings.longBreak / 60;
+                $settingsPanel.classList.add('open');
+                $settingsOverlay.classList.add('open');
+            });
+
+            /** 关闭设置面板 */
+            function closeSettings() {
+                $settingsPanel.classList.remove('open');
+                $settingsOverlay.classList.remove('open');
+            }
+
+            /** 点击遮罩层 → 关闭设置 */
+            $settingsOverlay.addEventListener('click', closeSettings);
+
+            /** 保存设置按钮 */
+            $btnSaveSettings.addEventListener('click', function() {
+                // 读取输入值，做边界限制（防呆）
+                var w = parseInt($workDurationInput.value) || 25;
+                var s = parseInt($shortBreakDurationInput.value) || 5;
+                var l = parseInt($longBreakDurationInput.value) || 15;
+                w = Math.max(1, Math.min(120, w));   // 专注 1~120 分钟
+                s = Math.max(1, Math.min(30, s));    // 短休息 1~30 分钟
+                l = Math.max(1, Math.min(60, l));    // 长休息 1~60 分钟
+
+                // 更新 state（转为秒）
+                state.settings.work = w * 60;
+                state.settings.shortBreak = s * 60;
+                state.settings.longBreak = l * 60;
+
+                // 如果计时器没在跑，立刻应用新时长到当前模式
+                if (!state.isRunning) {
+                    state.timeLeft = state.settings[state.mode];
+                    state.totalTime = state.settings[state.mode];
+                    updateTimeDisplay();
+                }
+
+                persistState();
+                closeSettings();
+            });
+
+            /**
+             * 键盘快捷键
+             *
+             * 空格 → 开始/暂停
+             * R    → 重置
+             * S    → 跳过
+             *
+             * 当焦点在输入框内时不触发（避免干扰打字）。
+             * Ctrl+R / Cmd+R 不触发重置（保护浏览器刷新功能）。
+             */
+            document.addEventListener('keydown', function(e) {
+                if (e.target.tagName === 'INPUT') return;   // 输入框中不响应
+                if (e.code === 'Space') {
+                    e.preventDefault();                     // 阻止页面滚动
+                    $btnStart.click();
+                } else if (e.code === 'KeyR' && !e.ctrlKey && !e.metaKey) {
+                    $btnReset.click();
+                } else if (e.code === 'KeyS' && !e.ctrlKey && !e.metaKey) {
+                    $btnSkip.click();
+                }
+            });
+
+            /**
+             * 页面可见性变化处理
+             *
+             * 场景：用户切换标签页后回来。
+             * 问题：setInterval 在后台标签页会被浏览器降频（通常降至 1 秒甚至更慢），
+             *       导致倒计时落后于实际时间。
+             * 方案：
+             *   1. 页面隐藏时（document.hidden=true）：记录当前时间和剩余秒数
+             *   2. 页面恢复时（document.hidden=false）：计算实际经过的时间，修正 timeLeft
+             *   3. 如果修正后 timeLeft≤0，直接触发计时结束
+             */
+            var hiddenAt = null;        // 隐藏时的 Date.now()
+            var hiddenTimeLeft = null;  // 隐藏时的剩余秒数
+
+            document.addEventListener('visibilitychange', function() {
+                if (document.hidden) {
+                    // ---- 页面被隐藏：记录快照 ----
+                    hiddenAt = Date.now();
+                    hiddenTimeLeft = state.timeLeft;
+                } else {
+                    // ---- 页面恢复可见：修正计时 ----
+                    if (state.isRunning && hiddenAt != null && hiddenTimeLeft != null) {
+                        var elapsed = Math.floor((Date.now() - hiddenAt) / 1000);
+                        state.timeLeft = Math.max(0, hiddenTimeLeft - elapsed);
+                        updateTimeDisplay();
+                        if (state.timeLeft <= 0) {
+                            handleTimerEnd();
+                        }
+                    }
+                }
+            });
+
+
+            // ==================== 第八部分：初始化 ====================
+            /**
+             * 应用启动入口
+             * 1. 根据当前模式设置初始时间
+             * 2. 全量渲染 UI
+             * 3. 请求通知权限
+             * 4. 注册 AudioContext 延迟初始化（等待用户首次交互）
+             */
+            function init() {
+                // 确保初始 totalTime 和 timeLeft 与当前模式一致
+                state.totalTime = state.settings[state.mode];
+                state.timeLeft = state.totalTime;
+
+                $dots = $sessionTracker.querySelectorAll('.tomato-dot');
+
+                renderAll();                     // 首次渲染
+                requestNotificationPermission(); // 请求通知权限（如果还没授权过）
+
+                // 浏览器自动播放策略：AudioContext 必须在用户手势之后创建。
+                // 这里监听首次 click 或 keydown 事件来初始化 AudioContext，
+                // 初始化完成后立即移除监听器，避免重复调用。
+                function initAudio() {
+                    getAudioContext();
+                    document.removeEventListener('click', initAudio);
+                    document.removeEventListener('keydown', initAudio);
+                }
+                document.addEventListener('click', initAudio);
+                document.addEventListener('keydown', initAudio);
+            }
+
+            // 启动应用！
+            init();
+
+        })();  // IIFE 结束 — 立即执行
+    </script>
+</body>
+</html>
